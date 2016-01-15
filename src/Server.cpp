@@ -8,12 +8,17 @@
 #include <netdb.h>
 
 #include  "Server.hpp"
+#include  "Router.hpp"
 #include  "Client.hpp"
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
 
-  Server::Server( const char* addr, const char* port ){
+  Server::Server(
+    const char* addr,
+    const char* port,
+    std::shared_ptr<Router> router
+  ) : router(router) {
     struct addrinfo hints;
     memset( &hints, 0, sizeof(hints) );
     hints.ai_family = AF_UNSPEC;     /* Allow IPv4 or IPv6 */
@@ -27,8 +32,17 @@ namespace SSL_SNI_Forwarder {
       socket = ::socket( address_result->ai_family, address_result->ai_socktype, address_result->ai_protocol );
       if( socket == -1 )
         continue;
-      if( !bind( socket, address_result->ai_addr, address_result->ai_addrlen ) )
+      int res;
+      char node[256], service[256];
+      if( !getnameinfo( address_result->ai_addr, address_result->ai_addrlen, node, sizeof(node), service, sizeof(service), NI_NUMERICSERV ) )
+        std::cout << "Try to bind to address " << node << " port " << service << std::endl;
+      do {
+        res = bind( socket, address_result->ai_addr, address_result->ai_addrlen );
+      } while( res == -1 && errno == EINTR );
+      if( !res )
         break;
+      if( res == -1 )
+        std::cerr << "Bind failed: " << strerror( errno ) << std::endl;
       close( socket );
       socket = -1;
     }
@@ -86,8 +100,7 @@ namespace SSL_SNI_Forwarder {
           std::cout << "New connection" << std::endl;
 
       for( auto client : clients )
-        if( client->isSet( set ) )
-          client->process();
+        client->process( set );
 
     }
 
@@ -132,4 +145,3 @@ namespace SSL_SNI_Forwarder {
   }
 
 }}
-

@@ -2,6 +2,8 @@
 #define DPA_SSL_SNI_FORWARDER_SERVER
 
 #include <vector>
+#include <memory>
+#include "Router.hpp"
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -14,7 +16,8 @@ namespace SSL_SNI_Forwarder {
   class Server {
     friend class Client;
     private:
-      struct addrinfo *address_results = 0, *address_result = 0;
+      struct addrinfo* address_results = 0;
+      struct addrinfo* address_result  = 0;
       int socket = -1, maxfd = -1;
       const char* error = 0;
       bool valid = false;
@@ -24,10 +27,16 @@ namespace SSL_SNI_Forwarder {
 
     public:
 
-      Server( const char* addr, const char* port );
-      virtual ~Server();
-      void run();
+      std::shared_ptr<Router> router;
 
+      Server(
+        const char* addr,
+        const char* port,
+        std::shared_ptr<Router> router = std::shared_ptr<Router>(new Router())
+      );
+      virtual ~Server();
+
+      void run();
       bool isOK();
       const char* getLastError();
       void stop();

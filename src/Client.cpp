@@ -1,13 +1,16 @@
 #include <errno.h>
+#include <unistd.h>
 #include <iostream>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
 #include <algorithm>
 #include <arpa/inet.h>
+#include <sys/sendfile.h>
 
 #include "Server.hpp"
 #include "Client.hpp"
+#include "Host.hpp"
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
@@ -21,20 +24,32 @@ namespace SSL_SNI_Forwarder {
     , socket(socket)
     , address(address)
     , address_length(address_length)
-    , offset(0)
-  {}
+  {
+    buffer = new unsigned char[buffer_size];
+  }
 
   Client::~Client(){
-    ::close( socket );
+    if( buffer ){
+      delete buffer;
+      buffer = 0;
+    }
+    if( socket != -1 )
+      ::close( socket );
+    if( destination != -1 )
+      ::close( destination );
   }
 
   void Client::addToSet( fd_set& set, int& maxfd ){
-    FD_SET( socket, &set );
-    maxfd = maxfd > socket ? maxfd : socket;
-  }
-
-  bool Client::isSet( fd_set& set ){
-    return FD_ISSET( socket, &set );
+    if( socket != -1 ){
+      FD_SET( socket, &set );
+      if( socket > maxfd )
+        maxfd = socket;
+    }
+    if( destination != -1 ){
+      FD_SET( destination, &set );
+      if( destination > maxfd )
+        maxfd = destination;
+    }
   }
 
   enum ContentType {
@@ -100,8 +115,56 @@ namespace SSL_SNI_Forwarder {
     uint8_t type;
     uint16_t length;
   };
-  
-  void Client::process(){
+
+  void Client::process( fd_set& set ){
+    if( destination == -1 ){
+      if( FD_ISSET( socket, &set ) )
+        determinateDestination();
+    }else{
+      tunnel( set );
+    }
+  }
+
+  void Client::tunnel( fd_set& set ){
+    char buffer[ 1024 * 1024 ];
+    int sd[2][2] = {
+      {socket,destination},
+      {destination,socket}
+    };
+    int res;
+    for(int i=2;i--;){
+      if( FD_ISSET( sd[i][0], &set ) ){
+        do {
+          res = recv( sd[i][0], buffer, sizeof(buffer), 0 );
+        } while( res == -1 && errno == EINVAL );
+        if( res == -1 ){
+          std::cerr << "Recv error: " << strerror(errno) << std::endl;
+          close();
+          return;
+        }
+        if( !res ){
+          close();
+          return;
+        }
+        if( res > 0 ){
+          size_t size = res;
+          do {
+            res = send( sd[i][1], buffer, size, 0 );
+            if( res > 0 )
+              size -= res;
+          } while( ( res == -1 && errno == EINVAL ) || ( res>0 && size ) );
+          if( res == -1 ){
+            std::cerr << "Send error: " << strerror(errno) << std::endl;
+            close();
+            return;
+          }
+        }
+      }
+    }
+  }
+
+  void Client::determinateDestination(){
+    if(!buffer) return;
     int res = recv( socket, buffer+offset, buffer_size-offset, 0 );
     if( res < 0 ){
       const char* msg = strerror(errno);
@@ -125,7 +188,7 @@ namespace SSL_SNI_Forwarder {
     size_t index = sizeof(struct TLSPlaintext);
     bool complete = ( offset - index >= len || len > buffer_size );
     uint16_t available = std::min( (size_t)len, offset - index ) + index;
-    
+
     do {
       if( available - index <= sizeof(struct Handshake) )
         break;
@@ -140,7 +203,6 @@ namespace SSL_SNI_Forwarder {
         available = hlen;
         complete = true;
       }
-      
 
       std::cout << "Handshake | Type "
         << (unsigned)handshake->type << " | length " << hlen
@@ -210,9 +272,10 @@ namespace SSL_SNI_Forwarder {
               break;
             e_len -= b_len + 2;
             if( b_len ){
-              serverNameList.push_back( ServerNameEntry(
-                (ServerNameType)type, std::string((char*)buffer+i,b_len)
-              ));
+              serverNameList.push_back({
+                (ServerNameType)type,
+                std::string((char*)buffer+i,b_len)
+              });
             }
             i += b_len;
           }
@@ -223,22 +286,67 @@ namespace SSL_SNI_Forwarder {
       }
 
     } while(0);
-    
-    if( serverNameList.size() ){
-      std::cout << serverNameList.size() << " servernames found:" << std::endl;
-      for( auto name : serverNameList ){
-        std::cout << " * type: " << name.type
-          << " | value: " << name.name
-        << std::endl;
-      }
+
+    if( complete || !serverNameList.empty() ){
+      forward();
       return;
     }
 
-    if( complete ){
+  }
+
+  void Client::forward(){
+
+    std::shared_ptr<Host> result = 0;
+    if( serverNameList.empty() ){
       std::cout << "Servername not found" << std::endl;
+    }else{
+      std::cout << serverNameList.size() << " servernames found, search destination: " << std::endl;
+      for( auto& name : serverNameList ){
+        std::cout << " * for servername " << name.name << std::endl;
+        if(( result = server->router->search( name.name ) ))
+          break;
+      }
+    }
+    if( result ){
+      std::cout << "Destination found: ";
+    }else if( result = server->router->default_destination ){
+      std::cout << "Using default destination:";
+    }else{
+      std::cout << "No destination found" << std::endl;
       close();
       return;
-    } return;
+    }
+    std::cout << result->name << std::endl;
+
+    destination = result->connect();
+    if( destination == -1 ){
+      close();
+      return;
+    }
+
+    std::cout << "Connected " << socket << " <==> " << destination << std::endl;
+
+    while(true){
+      std::cout << "Send previously recived data, " << offset << " bytes" << std::endl;
+      ssize_t res = send( destination, buffer, offset, 0 );
+      if( res == -1 ){
+        if( errno == EINVAL )
+          continue;
+        std::cerr << "Send failed: " << strerror(errno) << std::endl;
+        close();
+        return;
+      }
+      if( (size_t)res >= offset )
+        break;
+      offset -= res;
+      buffer += res;
+    }
+
+    if( buffer ){
+      delete buffer;
+      buffer = 0;
+    }
+
   }
 
   void Client::close(){

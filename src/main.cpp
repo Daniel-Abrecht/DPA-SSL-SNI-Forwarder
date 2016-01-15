@@ -29,8 +29,11 @@ int main(){
     std::cerr << "Error: " << server.getLastError() << std::endl;
     return 1;
   }
-
   ::server = &server;
+
+  server.router->add( "intranet", {
+    "localhost"
+  });
 
   std::cout << "Server running"  << std::endl;
   server.run();

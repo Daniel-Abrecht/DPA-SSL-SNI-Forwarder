@@ -1,3 +1,11 @@
+SRC = \
+  main.cpp \
+  Server.cpp \
+  Client.cpp \
+  Router.cpp \
+  Host.cpp
+
+
 TARGET = bin/ssl_sni_forwarder
 
 OPTS = -D_POSIX_SOURCE -g -Wall -Wextra -pedantic -Werror
@@ -5,8 +13,6 @@ OPTS = -D_POSIX_SOURCE -g -Wall -Wextra -pedantic -Werror
 COPTS = $(OPTS) -std=c11
 CPPOPTS = $(OPTS) -std=c++11
 LOPTS = 
-
-SRC = main.cpp Server.cpp Client.cpp
 
 OBJECTS = $(SRC:%.cpp=tmp/%.o)
 
