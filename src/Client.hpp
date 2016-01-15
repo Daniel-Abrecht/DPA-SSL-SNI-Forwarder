@@ -1,11 +1,24 @@
 #ifndef DPA_SSL_SNI_FORWARDER_CLIENT
 #define DPA_SSL_SNI_FORWARDER_CLIENT
 
-#include <stddef.h>
+#include <cstddef>
+#include <string>
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
 
+  enum ServerNameType {
+    SNT_host_name
+  };
+  
+  struct ServerNameEntry {
+    enum ServerNameType type;
+    std::string name;
+    ServerNameEntry( enum ServerNameType type, std::string&& name )
+     : type(type), name(name)
+    {}
+  };
+  
   class Server;
   class Client {
 
@@ -14,8 +27,10 @@ namespace SSL_SNI_Forwarder {
       int socket;
       struct sockaddr_storage address;
       socklen_t address_length;
-      char buffer[ 1024 * 4 ];
+      static constexpr const size_t buffer_size = 1024 * 4;
+      unsigned char buffer[ buffer_size ];
       size_t offset;
+      std::vector<ServerNameEntry> serverNameList;
 
     public:
 
