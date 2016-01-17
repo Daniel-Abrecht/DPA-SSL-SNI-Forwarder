@@ -1,44 +1,62 @@
 #include <iostream>
+#include <exception>
+#include <cstring>
+
 #include <signal.h>
+#include <unistd.h>
 
-#include  "Server.hpp"
-
-#define RW_BUFFER_SIZE 1024 * 4
-
-//static char buffer[RW_BUFFER_SIZE];
+#include  "ServerManager.hpp"
 
 using namespace DPA::SSL_SNI_Forwarder;
 
-static Server* server = 0;
+static ServerManager* servermanager = 0;
 
 void intHandler( int dummy ){
   (void)dummy;
-  if( server )
-    server->stop();
+  if( servermanager )
+    servermanager->stop();
 }
 
-int main(){
+int main( int argc, const char *argv[] ){
+  if( argc > 2 || ( argc == 2 && (
+      !strcmp(argv[1],"help")
+   || !strcmp(argv[1],"--help")
+   || !strcmp(argv[1],"-h")
+  ))){
+    std::cout << "Usage: " << argv[0] << " [config file]" << std::endl;
+    return 0;
+  }
 
-  std::cout << "Starting server" << std::endl;
+  std::cout << "Start" << std::endl;
 
+  ServerManager servermanager;
+
+  // Close standard input
+  close( STDIN_FILENO );
+
+  // Setup signal handlers
   signal( SIGINT , intHandler );
   signal( SIGTERM, intHandler );
-
-  Server server( "0.0.0.0", "8443" );
-  if( !server.isOK() ){
-    std::cerr << "Error: " << server.getLastError() << std::endl;
-    return 1;
-  }
-  ::server = &server;
-
-  server.router->add( "intranet", {
-    "localhost"
+  signal( SIGHUP, [](int dummy){
+    (void) dummy;
+    if(::servermanager)
+      ::servermanager->do_reload = true;
   });
 
-  std::cout << "Server running"  << std::endl;
-  server.run();
+  // Set config file
+  if( argc == 2 )
+    servermanager.setConfigFile( argv[1] );
 
-  std::cout << "Stoping server"  << std::endl;
+  // Load config file
+  servermanager.reloadConfig();
 
+  ::servermanager = &servermanager;
+
+  // Start server
+  servermanager.run();
+
+  std::cout << "end" << std::endl;
+
+  ::servermanager = 0;
   return 0;
 }

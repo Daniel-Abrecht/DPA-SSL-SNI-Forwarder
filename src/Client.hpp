@@ -34,7 +34,7 @@ namespace SSL_SNI_Forwarder {
 
     public:
 
-      Client( Server*, int, struct sockaddr_storage, socklen_t );
+      Client( Server*, int, struct sockaddr_storage&, socklen_t );
       virtual ~Client();
       void addToSet( fd_set& set, int& maxfd );
       void process( fd_set& set );

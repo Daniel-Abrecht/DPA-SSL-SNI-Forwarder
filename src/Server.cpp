@@ -15,15 +15,17 @@ namespace DPA {
 namespace SSL_SNI_Forwarder {
 
   Server::Server(
-    const char* addr,
-    const char* port,
+    const AddressInfo& address,
     std::shared_ptr<Router> router
-  ) : router(router) {
+  ) : address(address)
+    , router(router)
+  {
+    std::cout << "Createing new server on node " << address.node << " service " << address.service << std::endl;
     struct addrinfo hints;
     memset( &hints, 0, sizeof(hints) );
     hints.ai_family = AF_UNSPEC;     /* Allow IPv4 or IPv6 */
     hints.ai_socktype = SOCK_STREAM;  /* Datagram socket */
-    int eno = getaddrinfo( addr, port, &hints, &address_results );
+    int eno = getaddrinfo( address.node.c_str(), address.service.c_str(), &hints, &address_results );
     if( eno ){
       error = gai_strerror( eno );
       return;
@@ -35,7 +37,7 @@ namespace SSL_SNI_Forwarder {
       int res;
       char node[256], service[256];
       if( !getnameinfo( address_result->ai_addr, address_result->ai_addrlen, node, sizeof(node), service, sizeof(service), NI_NUMERICSERV ) )
-        std::cout << "Try to bind to address " << node << " port " << service << std::endl;
+        std::cout << "Try to bind to node " << node << " service " << service << std::endl;
       do {
         res = bind( socket, address_result->ai_addr, address_result->ai_addrlen );
       } while( res == -1 && errno == EINTR );
@@ -62,48 +64,40 @@ namespace SSL_SNI_Forwarder {
       close( socket );
     if( address_results )
       freeaddrinfo( address_results );
+    while( !clients.empty() )
+      delete clients[0];
+    std::cout << "Remove server on node " << address.node << " service " << address.service << std::endl;
   }
 
-  void Server::run(){
-
+  void Server::addToSet( fd_set& set, int& maxfd ){
     if(!valid)
       return;
 
-    fd_set set;
-    struct timeval tv;
-
-    keep_running = true;
-
-    while( keep_running ){
-
+    if( maxfd < socket )
       maxfd = socket;
 
-      FD_ZERO( &set );
-      FD_SET( socket, &set );
+    FD_SET( socket, &set );
 
-      for( auto client : clients )
-        client->addToSet( set, maxfd );
+    for( auto client : clients )
+      client->addToSet( set, maxfd );
 
-      tv.tv_sec = 5;
-      tv.tv_usec = 0;
-      int n = select( maxfd+1, &set, 0, 0, &tv );
-      if( !n )
-        continue;
-      if( n == -1 ){
-        error = strerror( errno );
-        std::cerr << "Error: " << error << std::endl;
-        continue;
-      }
+  }
 
-      if( FD_ISSET( socket, &set ) )
-        if( acceptClient() )
-          std::cout << "New connection" << std::endl;
+  void Server::process( fd_set& set ){
+    if(!valid)
+      return;
 
-      for( auto client : clients )
-        client->process( set );
+    if( FD_ISSET( socket, &set ) )
+      if( acceptClient() )
+        std::cout << "New connection" << std::endl;
 
-    }
+    for( auto client : clients )
+      client->process( set );
 
+  }
+
+  const AddressInfo& Server::getAddress(){
+    return address;
   }
 
   bool Server::acceptClient(){
@@ -122,16 +116,8 @@ namespace SSL_SNI_Forwarder {
     return true;
   }
 
-  bool Server::isOK(){
-    return valid;
-  }
-
   const char* Server::getLastError(){
     return error;
-  }
-
-  void Server::stop(){
-    keep_running = false;
   }
 
   void Server::remove( Client* c ){
@@ -141,7 +127,6 @@ namespace SSL_SNI_Forwarder {
         clients.erase( client );
         break;
       }
-    delete c;
   }
 
 }}

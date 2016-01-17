@@ -2,32 +2,29 @@
 #include <cstddef>
 #include <algorithm>
 #include "Router.hpp"
+#include "utils.hpp"
 #include "Host.hpp"
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
 
-template <typename T>
-bool compare_ignore_case( T a, T b ){
-  return std::tolower(a) == std::tolower(b);
-}
-
-template <typename T>
-bool equals_ignore_case( std::basic_string<T> const& a, std::basic_string<T> const& b ){
-  return std::equal( b.begin(), b.end(), a.begin(), compare_ignore_case<T> );
-}
 void Router::add(
-  const std::string& host,
+  const AddressInfo& address,
   const std::vector<std::string>& SSL_names
 ){
-  add( std::shared_ptr<Host>(new Host{host}), SSL_names );
+  for( auto& destination : destination_list )
+    if( destination.host->address == address ){
+      destination.SSL_names = SSL_names;
+    }
+  destination_list.push_back( { std::shared_ptr<Host>(new Host{address}), SSL_names } );
 }
 
-void Router::add(
-  std::shared_ptr<Host> host,
-  const std::vector<std::string>& SSL_names
-){
-  destination_list.push_back( { host, SSL_names } );
+std::shared_ptr<Host> Router::search( const AddressInfo& address ){
+  for( auto& destination : destination_list ){
+    destination.host->address == address;
+    return destination.host;
+  }
+  return std::nullptr_t();
 }
 
 std::shared_ptr<Host> Router::search( const std::string& SSL_name ){
@@ -36,6 +33,10 @@ std::shared_ptr<Host> Router::search( const std::string& SSL_name ){
       if( equals_ignore_case( name, SSL_name ) )
         return destination.host;
   return std::nullptr_t();
+}
+
+void Router::clear(){
+  destination_list.clear();
 }
 
 }}

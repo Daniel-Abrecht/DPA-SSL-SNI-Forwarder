@@ -18,7 +18,7 @@ namespace SSL_SNI_Forwarder {
   Client::Client(
     Server* server,
     int socket,
-    struct sockaddr_storage address,
+    struct sockaddr_storage& address,
     socklen_t address_length
   ) : server(server)
     , socket(socket)
@@ -37,6 +37,7 @@ namespace SSL_SNI_Forwarder {
       ::close( socket );
     if( destination != -1 )
       ::close( destination );
+    server->remove( this );
   }
 
   void Client::addToSet( fd_set& set, int& maxfd ){
@@ -310,13 +311,13 @@ namespace SSL_SNI_Forwarder {
     if( result ){
       std::cout << "Destination found: ";
     }else if( result = server->router->default_destination ){
-      std::cout << "Using default destination:";
+      std::cout << "Using default destination: ";
     }else{
       std::cout << "No destination found" << std::endl;
       close();
       return;
     }
-    std::cout << result->name << std::endl;
+    std::cout << "node " << result->address.node << " service " <<  result->address.service << std::endl;
 
     destination = result->connect();
     if( destination == -1 ){
@@ -350,7 +351,7 @@ namespace SSL_SNI_Forwarder {
   }
 
   void Client::close(){
-    server->remove( this );
+    delete this;
   }
 
 }}

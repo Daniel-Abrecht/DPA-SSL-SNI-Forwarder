@@ -7,17 +7,16 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
+#include "utils.hpp"
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
 
 class Host {
   public:
-    const std::string name;
-    const std::string protocol;
+    AddressInfo address;
 
-  public:
-    Host( const std::string&, const std::string& ="443" );
+    Host( const AddressInfo& );
     ~Host();
     int connect();
 
