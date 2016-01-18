@@ -2,7 +2,6 @@
 #define DPA_SSL_SNI_FORWARDER_SERVER
 
 #include <vector>
-#include <memory>
 #include "Router.hpp"
 #include <unistd.h>
 #include <sys/types.h>
@@ -31,17 +30,14 @@ namespace SSL_SNI_Forwarder {
 
     public:
 
-      std::shared_ptr<Router> router;
+      Router router;
 
-      Server(
-        const AddressInfo& address,
-        std::shared_ptr<Router> router = std::shared_ptr<Router>(new Router())
-      );
+      Server( const AddressInfo& address );
       virtual ~Server();
 
       void run();
-      void addToSet( fd_set& set, int& maxfd );
-      void process( fd_set& set );
+      void addToSet( fd_set& read_set, fd_set& write_set, int& maxfd );
+      void process( fd_set& read_set, fd_set& write_set );
       const char* getLastError();
       const AddressInfo& getAddress();
 

@@ -10,7 +10,6 @@
 
 #include "Server.hpp"
 #include "Client.hpp"
-#include "Host.hpp"
 
 namespace DPA {
 namespace SSL_SNI_Forwarder {
@@ -24,15 +23,9 @@ namespace SSL_SNI_Forwarder {
     , socket(socket)
     , address(address)
     , address_length(address_length)
-  {
-    buffer = new unsigned char[buffer_size];
-  }
+  {}
 
   Client::~Client(){
-    if( buffer ){
-      delete buffer;
-      buffer = 0;
-    }
     if( socket != -1 )
       ::close( socket );
     if( destination != -1 )
@@ -40,16 +33,28 @@ namespace SSL_SNI_Forwarder {
     server->remove( this );
   }
 
-  void Client::addToSet( fd_set& set, int& maxfd ){
-    if( socket != -1 ){
-      FD_SET( socket, &set );
+  void Client::addToSet( fd_set& read_set, fd_set& write_set, int& maxfd ){
+    if( read_or_write ){
+      if(socket)
+        FD_SET( socket, &read_set );
       if( socket > maxfd )
         maxfd = socket;
-    }
-    if( destination != -1 ){
-      FD_SET( destination, &set );
+      if(destination)
+        FD_SET( destination, &read_set );
       if( destination > maxfd )
         maxfd = destination;
+    }else{
+      if( source_or_destination ){
+        if(socket)
+          FD_SET( socket, &write_set );
+        if( socket > maxfd )
+          maxfd = socket;
+      }else{
+        if(destination)
+          FD_SET( destination, &write_set );
+        if( destination > maxfd )
+          maxfd = destination;
+      }
     }
   }
 
@@ -117,67 +122,40 @@ namespace SSL_SNI_Forwarder {
     uint16_t length;
   };
 
-  void Client::process( fd_set& set ){
-    if( destination == -1 ){
-      if( FD_ISSET( socket, &set ) )
-        determinateDestination();
-    }else{
-      tunnel( set );
-    }
-  }
-
-  void Client::tunnel( fd_set& set ){
-    char buffer[ 1024 * 1024 ];
-    int sd[2][2] = {
-      {socket,destination},
-      {destination,socket}
-    };
-    int res;
-    for(int i=2;i--;){
-      if( FD_ISSET( sd[i][0], &set ) ){
-        do {
-          res = recv( sd[i][0], buffer, sizeof(buffer), 0 );
-        } while( res == -1 && errno == EINVAL );
-        if( res == -1 ){
-          std::cerr << "Recv error: " << strerror(errno) << std::endl;
-          close();
+  void Client::process( fd_set& read_set, fd_set& write_set ){
+    if( read_or_write ){
+      if( (source_or_destination ? socket : destination) == -1
+        || !FD_ISSET( source_or_destination ? socket : destination, &read_set )
+      ){
+        source_or_destination = !source_or_destination;
+        if( (source_or_destination ? socket : destination) == -1
+          || !FD_ISSET( source_or_destination ? socket : destination, &read_set )
+        ){
+          source_or_destination = !source_or_destination;
           return;
-        }
-        if( !res ){
-          close();
-          return;
-        }
-        if( res > 0 ){
-          size_t size = res;
-          do {
-            res = send( sd[i][1], buffer, size, 0 );
-            if( res > 0 )
-              size -= res;
-          } while( ( res == -1 && errno == EINVAL ) || ( res>0 && size ) );
-          if( res == -1 ){
-            std::cerr << "Send error: " << strerror(errno) << std::endl;
-            close();
-            return;
-          }
         }
       }
+    }else{
+      if( !FD_ISSET( source_or_destination ? socket : destination, &write_set ) )
+        return;
     }
+    (this->*next_action)();
   }
 
   void Client::determinateDestination(){
-    if(!buffer) return;
-    int res = recv( socket, buffer+offset, buffer_size-offset, 0 );
-    if( res < 0 ){
+    int res = recv( socket, buffer+write_offset, buffer_size-write_offset, 0 );
+    if( res == -1 ){
       const char* msg = strerror(errno);
       std::cerr << "Error: " << msg << std::endl;
+      close();
       return;
     }
     if( !res ){
       close();
       return;
     }
-    offset += res;
-    if( offset < sizeof(struct TLSPlaintext) )
+    write_offset += res;
+    if( write_offset < sizeof(struct TLSPlaintext) )
       return; // not enough data
     struct TLSPlaintext* tls = (struct TLSPlaintext*)buffer;
     if( tls->type != CT_handshake ){
@@ -187,8 +165,8 @@ namespace SSL_SNI_Forwarder {
     uint16_t len = ntohs( tls->length );
     std::cout << "TLSPlaintext | length: " << len << std::endl;
     size_t index = sizeof(struct TLSPlaintext);
-    bool complete = ( offset - index >= len || len > buffer_size );
-    uint16_t available = std::min( (size_t)len, offset - index ) + index;
+    bool complete = ( write_offset - index >= len || len > buffer_size );
+    uint16_t available = std::min( (size_t)len, write_offset - index ) + index;
 
     do {
       if( available - index <= sizeof(struct Handshake) )
@@ -289,65 +267,160 @@ namespace SSL_SNI_Forwarder {
     } while(0);
 
     if( complete || !serverNameList.empty() ){
-      forward();
+      Client::lookupDestinationAddress();
       return;
     }
 
   }
 
-  void Client::forward(){
+  void Client::lookupDestinationAddress(){
 
-    std::shared_ptr<Host> result = 0;
+    bool found = false;
     if( serverNameList.empty() ){
       std::cout << "Servername not found" << std::endl;
     }else{
       std::cout << serverNameList.size() << " servernames found, search destination: " << std::endl;
       for( auto& name : serverNameList ){
         std::cout << " * for servername " << name.name << std::endl;
-        if(( result = server->router->search( name.name ) ))
+        if(( found = server->router.search( destination_address, name.name ) ))
           break;
       }
     }
-    if( result ){
+    if( found ){
       std::cout << "Destination found: ";
-    }else if( result = server->router->default_destination ){
+    }else if( server->router.has_default_destination ){
+      destination_address = server->router.default_destination;
       std::cout << "Using default destination: ";
     }else{
       std::cout << "No destination found" << std::endl;
       close();
       return;
     }
-    std::cout << "node " << result->address.node << " service " <<  result->address.service << std::endl;
+    std::cout << "node " << destination_address.node << " service " <<  destination_address.service << std::endl;
 
-    destination = result->connect();
-    if( destination == -1 ){
+    struct addrinfo hints;
+    memset( &hints, 0, sizeof(hints) );
+    hints.ai_family = AF_UNSPEC;     /* Allow IPv4 or IPv6 */
+    hints.ai_socktype = SOCK_STREAM;  /* Datagram socket */
+    int eno = getaddrinfo( destination_address.node.c_str(), destination_address.service.c_str(), &hints, &address_results );
+    if( eno ){
+      std::cerr << "getaddrinfo failed: " << gai_strerror( eno ) << std::endl;
       close();
       return;
     }
 
-    std::cout << "Connected " << socket << " <==> " << destination << std::endl;
+    addr = address_results;
+    Client::connect();
 
-    while(true){
-      std::cout << "Send previously recived data, " << offset << " bytes" << std::endl;
-      ssize_t res = send( destination, buffer, offset, 0 );
+  }
+
+  void Client::connect(){
+    read_or_write = false;
+    source_or_destination = false;
+    next_action = &Client::connect;
+
+    if( destination != -1 ){
+      int so_error;
+      socklen_t slen = sizeof( so_error );
+      getsockopt( destination, SOL_SOCKET, SO_ERROR, &so_error, &slen );
+      if( !so_error ){
+        std::cout << "Connected " << socket << " <==> " << destination << std::endl;
+        next_action = &Client::send;
+        return;
+      }
+      if( so_error == EINPROGRESS )
+        return;
+      std::cerr << "Async connect failed: " << strerror( so_error ) << std::endl;
+      ::close( destination );
+      destination = -1;
+    }
+
+    for( ; addr; addr = addr->ai_next ){
+      destination = ::socket( addr->ai_family, addr->ai_socktype | SOCK_NONBLOCK, addr->ai_protocol );
+      if( destination == -1 )
+        continue;
+      int res;
+      char node[256], service[256];
+      if( !getnameinfo( addr->ai_addr, addr->ai_addrlen, node, sizeof(node), service, sizeof(service), NI_NUMERICSERV ) )
+        std::cout << "Try to connect to addr " << destination_address.node << " service " << destination_address.service << std::endl;
+      do {
+        res = ::connect( destination, addr->ai_addr, addr->ai_addrlen );
+      } while( res == -1 && errno == EINTR );
       if( res == -1 ){
-        if( errno == EINVAL )
-          continue;
+        if( errno == EINPROGRESS )
+          return;
+        std::cerr << "Connect failed: " << strerror( errno ) << std::endl;
+      }
+      if( !res ) break;
+      ::close( destination );
+      destination = -1;
+    }
+
+    if( address_results )
+      freeaddrinfo( address_results );
+
+    if( !addr ){
+      std::cerr << "No address_result found for " << destination_address.node << " service " << destination_address.service << std::endl;
+      close();
+      return;
+    }else{
+      std::cout << "Connected " << socket << " <==> " << destination << std::endl;
+      next_action = &Client::send;
+      return;
+    }
+
+  }
+
+
+  void Client::send(){
+    if(!write_offset)
+      goto allSent;
+    {
+//      std::cout << "Send data, " << read_offset << " - " << write_offset << " bytes" << std::endl;
+      ssize_t res;
+      do {
+        res = ::send( source_or_destination ? socket : destination, buffer+read_offset, write_offset-read_offset, 0 );
+      } while( res == -1 && errno == EINVAL );
+      if( res == -1 ){
         std::cerr << "Send failed: " << strerror(errno) << std::endl;
+        return;
+      }
+//      std::cout << "Sent " << res << " bytes" << std::endl;
+      read_offset += res;
+      if( read_offset >= write_offset )
+        goto allSent;
+      return;
+    }
+    allSent: {
+      read_offset = 0;
+      write_offset = 0;
+      read_or_write = true;
+      next_action = &Client::recive;
+      return;
+    }
+  }
+
+  void Client::recive(){
+    ssize_t res;
+    do {
+      res = recv( source_or_destination ? socket : destination, buffer, buffer_size, 0 );
+    } while( res == -1 && errno == EINVAL );
+    if( res >= 0 || ( res == -1 && ( errno != EAGAIN || errno != EWOULDBLOCK ) ) ){
+      if( res == -1 ){
+        std::cerr << "Recv error: " << strerror(errno) << std::endl;
         close();
         return;
       }
-      if( (size_t)res >= offset )
-        break;
-      offset -= res;
-      buffer += res;
+      if( !res ){
+        close();
+        return;
+      }
+      write_offset = res;
+//      std::cout << "recived " << res << " bytes of data" << std::endl;
+      read_or_write = false;
+      source_or_destination = !source_or_destination;
+      next_action = &Client::send;
     }
-
-    if( buffer ){
-      delete buffer;
-      buffer = 0;
-    }
-
   }
 
   void Client::close(){

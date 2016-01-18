@@ -3,7 +3,6 @@ SRC = \
   Server.cpp \
   Client.cpp \
   Router.cpp \
-  Host.cpp \
   ServerManager.cpp \
   ServerConfig.cpp
 

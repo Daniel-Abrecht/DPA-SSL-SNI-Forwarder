@@ -6,7 +6,6 @@
 #include <utility>
 #include <iostream>
 
-#include "Host.hpp"
 #include "Server.hpp"
 #include "ServerManager.hpp"
 #include "ServerConfig.hpp"
@@ -16,7 +15,7 @@ namespace SSL_SNI_Forwarder {
 
 void ServerManager::run(){
 
-  fd_set set;
+  fd_set read_set, write_set;
   struct timeval tv;
 
   while( keep_running ){
@@ -26,14 +25,15 @@ void ServerManager::run(){
     }
 
     int maxfd = 0;
-    FD_ZERO( &set );
+    FD_ZERO( &read_set );
+    FD_ZERO( &write_set );
 
     for( auto server : server_list )
-      server->addToSet( set, maxfd );
+      server->addToSet( read_set, write_set, maxfd );
 
     tv.tv_sec = 5;
     tv.tv_usec = 0;
-    int n = select( maxfd+1, &set, 0, 0, &tv );
+    int n = select( maxfd+1, &read_set, &write_set, 0, &tv );
     if( !n )
       continue;
     if( n == -1 ){
@@ -42,7 +42,7 @@ void ServerManager::run(){
     }
 
     for( auto server : server_list )
-      server->process( set );
+      server->process( read_set, write_set );
 
   }
 
@@ -95,12 +95,9 @@ bool ServerManager::reloadConfig(){
 
     // Update routes
 
-    s->router->clear();
-    if( c->has_default_destination ){
-      s->router->default_destination = std::shared_ptr<Host>(new Host(c->default_destination));
-    }else{
-      s->router->default_destination = std::nullptr_t();
-    }
+    s->router = Router();
+    s->router.has_default_destination = c->has_default_destination;
+    s->router.default_destination = c->default_destination;
 
     for( auto name : c->route_name_list ){
       auto result = config.route.find(name);
@@ -109,7 +106,7 @@ bool ServerManager::reloadConfig(){
         continue;
       }
       auto& route = result->second;
-      s->router->add( route.destination, route.host );
+      s->router.add( route.destination, route.host );
     }
 
     server_list.push_back(s);

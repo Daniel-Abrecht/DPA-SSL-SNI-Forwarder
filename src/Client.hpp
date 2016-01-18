@@ -22,22 +22,36 @@ namespace SSL_SNI_Forwarder {
     private:
       Server* server;
       int socket = -1, destination = -1;
+      AddressInfo destination_address;
       struct sockaddr_storage address;
+      struct addrinfo* address_results = 0;
+      struct addrinfo* addr = 0;
       socklen_t address_length;
-      static constexpr const size_t buffer_size = 1024 * 4;
-      unsigned char* buffer = 0;
-      size_t offset = 0;
+      static constexpr const size_t buffer_size = 1024 * 8;
+      unsigned char buffer[buffer_size];
+      size_t write_offset = 0;
+      size_t read_offset = 0;
       std::vector<ServerNameEntry> serverNameList;
+
+      bool read_or_write = true;
+      bool source_or_destination = true;
+
+      void (Client::*next_action)() = &Client::determinateDestination;
 
       void tunnel( fd_set& set );
       void determinateDestination();
+      void lookupDestinationAddress();
+      void send();
+      void connect();
+      void recive();
+
 
     public:
 
       Client( Server*, int, struct sockaddr_storage&, socklen_t );
       virtual ~Client();
-      void addToSet( fd_set& set, int& maxfd );
-      void process( fd_set& set );
+      void addToSet( fd_set& read_set, fd_set& write_set, int& maxfd );
+      void process( fd_set& read_set, fd_set& write_set );
       void close();
       void forward();
 

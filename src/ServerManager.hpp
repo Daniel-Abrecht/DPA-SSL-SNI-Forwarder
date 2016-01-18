@@ -1,7 +1,6 @@
 #ifndef DPA_SSL_SNI_FORWARDER_SERVERMANAGER
 #define DPA_SSL_SNI_FORWARDER_SERVERMANAGER
 
-#include <memory>
 #include <vector>
 
 namespace DPA {

@@ -14,11 +14,8 @@
 namespace DPA {
 namespace SSL_SNI_Forwarder {
 
-  Server::Server(
-    const AddressInfo& address,
-    std::shared_ptr<Router> router
-  ) : address(address)
-    , router(router)
+  Server::Server( const AddressInfo& address  )
+    : address(address)
   {
     std::cout << "Createing new server on node " << address.node << " service " << address.service << std::endl;
     struct addrinfo hints;
@@ -69,30 +66,30 @@ namespace SSL_SNI_Forwarder {
     std::cout << "Remove server on node " << address.node << " service " << address.service << std::endl;
   }
 
-  void Server::addToSet( fd_set& set, int& maxfd ){
+  void Server::addToSet( fd_set& read_set, fd_set& write_set, int& maxfd ){
     if(!valid)
       return;
 
     if( maxfd < socket )
       maxfd = socket;
 
-    FD_SET( socket, &set );
+    FD_SET( socket, &read_set );
 
     for( auto client : clients )
-      client->addToSet( set, maxfd );
+      client->addToSet( read_set, write_set, maxfd );
 
   }
 
-  void Server::process( fd_set& set ){
+  void Server::process( fd_set& read_set, fd_set& write_set ){
     if(!valid)
       return;
 
-    if( FD_ISSET( socket, &set ) )
+    if( FD_ISSET( socket, &read_set ) )
       if( acceptClient() )
         std::cout << "New connection" << std::endl;
 
     for( auto client : clients )
-      client->process( set );
+      client->process( read_set, write_set );
 
   }
 
