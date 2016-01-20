@@ -56,22 +56,6 @@ struct convert<ServerConfig> {
 };
 
 template<>
-struct convert<RouteConfig> {
-  static Node encode(const RouteConfig& rc) {
-    Node node;
-    node["destination"] = rc.destination;
-    node["host"] = rc.host;
-    return node;
-  }
-
-  static bool decode(const Node& node, RouteConfig& rc) {
-    parse( rc.destination, node["destination"] );
-    parse( rc.host, node["host"] );
-    return true;
-  }
-};
-
-template<>
 struct convert<Config> {
 
   static Node encode(const Config& rc) {

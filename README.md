@@ -29,17 +29,14 @@ server:
 
 route:
   public:
-    destination: example.com 443
-    host:
+    example.com 443:
       - example.net
       - example.org
 
   private:
-    destination: example.org
-    host:
+    example.org:
       - localhost
 ```
-However, i will probably change this a bit soon.
 
 ## How to Build
 

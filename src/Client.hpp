@@ -38,7 +38,6 @@ namespace SSL_SNI_Forwarder {
 
       void (Client::*next_action)() = &Client::determinateDestination;
 
-      void tunnel( fd_set& set );
       void determinateDestination();
       void lookupDestinationAddress();
       void send();

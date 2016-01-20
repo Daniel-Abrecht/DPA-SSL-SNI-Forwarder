@@ -105,8 +105,8 @@ bool ServerManager::reloadConfig(){
         std::cerr << "No route entry for " << name << " found" << std::endl;
         continue;
       }
-      auto& route = result->second;
-      s->router.add( route.destination, route.host );
+      for( auto& route : result->second )
+        s->router.add( route.first, route.second );
     }
 
     server_list.push_back(s);
